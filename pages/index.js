@@ -2,6 +2,8 @@
 import { useEffect, useState } from "react";
 
 export default function Flashcards() {
+  const STORAGE_KEY = "flashcardsProgress";
+
   const initialData = [
     // Aula 9: Teste de Software
     {
@@ -156,6 +158,39 @@ export default function Flashcards() {
   const [flipped, setFlipped] = useState(false);
   const [visibleControls, setVisibleControls] = useState(false);
   const [currentCard, setCurrentCard] = useState(null);
+  const [sessionActive, setSessionActive] = useState(true);
+  const [stats, setStats] = useState({
+    correct: 0,
+    wrong: 0,
+    reviewed: 0,
+    sessions: 0,
+  });
+  const CARDS_PER_SESSION = 10;
+  const NOTIFY_INTERVAL = 1000 * 60 * 15;
+
+  useEffect(() => {
+    if ("Notification" in window) {
+      Notification.requestPermission().then((perm) => {
+        console.log("Permissão de notificação:", perm);
+      });
+    }
+  }, []);
+
+  const sendNotification = (title, body) => {
+    if (Notification.permission === "granted") {
+      new Notification(title, {
+        body,
+        icon: "/favicon.ico",
+      });
+    }
+  };
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      sendNotification("Hora de revisar!", "Está pronto para responder mais alguns flashcards?");
+    }, NOTIFY_INTERVAL);
+    return () => clearInterval(interval);
+  }, []);
 
   const shuffle = (arr) => {
     const array = [...arr];
@@ -176,10 +211,38 @@ export default function Flashcards() {
   };
 
   useEffect(() => {
-    const newDeck = buildDeck(initialData);
-    setDeck(newDeck);
-    setCurrentCard(initialData[newDeck[0]]);
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      setCards(parsed.cards || initialData);
+      setDeck(parsed.deck || []);
+      setPos(parsed.pos || 0);
+      setStats(parsed.stats || { correct: 0, wrong: 0, reviewed: 0, sessions: 0 });
+      setSessionActive(parsed.sessionActive ?? true);
+      if (parsed.deck?.length > 0) {
+        setCurrentCard((parsed.cards || initialData)[parsed.deck[parsed.pos] || 0]);
+      }
+    } else {
+      startSession(initialData);
+    }
   }, []);
+
+  useEffect(() => {
+    const dataToSave = { cards, deck, pos, stats, sessionActive };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+  }, [cards, deck, pos, stats, sessionActive]);
+
+  const startSession = (cardsList = cards) => {
+    const fullDeck = buildDeck(cardsList);
+    const limitedDeck = fullDeck.slice(0, CARDS_PER_SESSION);
+    setDeck(limitedDeck);
+    setPos(0);
+    setCurrentCard(cardsList[limitedDeck[0]]);
+    setFlipped(false);
+    setVisibleControls(false);
+    setSessionActive(true);
+    setStats((s) => ({ ...s, sessions: s.sessions + 1 }));
+  };
 
   const next = () => {
     setFlipped(false);
@@ -187,10 +250,8 @@ export default function Flashcards() {
     const nextPos = pos + 1;
 
     if (nextPos >= deck.length) {
-      const rebuilt = buildDeck(cards);
-      setDeck(rebuilt);
-      setPos(0);
-      setCurrentCard(cards[rebuilt[0]]);
+      setSessionActive(false);
+      sendNotification("Sessão concluída! 🎉", "Deseja continuar estudando?");
     } else {
       setPos(nextPos);
       setCurrentCard(cards[deck[nextPos]]);
@@ -202,6 +263,11 @@ export default function Flashcards() {
     const updated = [...cards];
     updated[idx].weight = Math.max(1, (updated[idx].weight || 2) - 1);
     setCards(updated);
+    setStats((s) => ({
+      ...s,
+      correct: s.correct + 1,
+      reviewed: s.reviewed + 1,
+    }));
     next();
   };
 
@@ -210,16 +276,60 @@ export default function Flashcards() {
     const updated = [...cards];
     updated[idx].weight = Math.min(5, (updated[idx].weight || 2) + 2);
     setCards(updated);
+    setStats((s) => ({
+      ...s,
+      wrong: s.wrong + 1,
+      reviewed: s.reviewed + 1,
+    }));
     next();
+  };
+
+  const resetProgress = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    setCards(initialData);
+    startSession(initialData);
+    setStats({ correct: 0, wrong: 0, reviewed: 0, sessions: 1 });
   };
 
   if (!currentCard) return <p>Carregando...</p>;
 
+  const accuracy =
+    stats.reviewed > 0 ? ((stats.correct / stats.reviewed) * 100).toFixed(1) : 0;
+
+  if (!sessionActive) {
+    return (
+      <main className="flex flex-col items-center justify-center min-h-screen text-white p-6 text-center">
+        <h1 className="text-3xl font-bold text-sky-400 mb-4">Sessão concluída! 🎉</h1>
+        <p className="text-lg mb-3">Você revisou {CARDS_PER_SESSION} flashcards.</p>
+        <p className="text-green-400">Acertos: {stats.correct}</p>
+        <p className="text-red-400">Erros: {stats.wrong}</p>
+        <p className="text-sky-300">Precisão geral: {accuracy}%</p>
+
+        <button
+          onClick={() => startSession(cards)}
+          className="mt-6 bg-emerald-400 hover:bg-emerald-500 text-[#111] px-6 py-3 rounded-lg font-semibold transition-transform hover:-translate-y-1"
+        >
+          Continuar estudando 🔁
+        </button>
+
+        <button
+          onClick={resetProgress}
+          className="mt-4 bg-red-500 hover:bg-red-600 text-white px-5 py-2 rounded-lg transition"
+        >
+          Resetar progresso 🧹
+        </button>
+
+        <p className="mt-4 text-gray-400">Sessões realizadas: {stats.sessions}</p>
+      </main>
+    );
+  }
+
   return (
-    <main className="w-full flex flex-col items-center">
-      <h1>Flashcards: Qualidade de Software</h1>
+    <main className="w-full flex flex-col items-center p-5 text-white">
+      <h1 className="text-3xl font-bold mb-6 text-sky-400">Flashcards: Qualidade de Software</h1>
+
       <div
-        className={`relative w-full h-[400px] transition-transform duration-500 [transform-style:preserve-3d] cursor-pointer ${flipped ? "[transform:rotateY(180deg)]" : ""
+        className={`relative w-full max-w-lg h-[400px] transition-transform duration-500 [transform-style:preserve-3d] cursor-pointer ${flipped ? "[transform:rotateY(180deg)]" : ""
           }`}
         onClick={() => {
           setFlipped(!flipped);
@@ -238,7 +348,7 @@ export default function Flashcards() {
       </div>
 
       <p className="mt-5 text-lg font-semibold">
-        Revisão {pos + 1} de {deck.length}
+        Card {pos + 1} de {deck.length}
       </p>
 
       <div
@@ -249,14 +359,23 @@ export default function Flashcards() {
           onClick={handleWrong}
           className="flex items-center gap-2 bg-red-400 hover:bg-red-500 text-white font-[Poppins] font-semibold px-5 py-3 rounded-lg transition-transform hover:-translate-y-1"
         >
-          <i className="fa-solid fa-times"></i> Errei
+          ❌ Errei
         </button>
         <button
           onClick={handleCorrect}
           className="flex items-center gap-2 bg-emerald-400 hover:bg-emerald-500 text-[#111] font-[Poppins] font-semibold px-5 py-3 rounded-lg transition-transform hover:-translate-y-1"
         >
-          <i className="fa-solid fa-check"></i> Acertei!
+          ✅ Acertei
         </button>
+      </div>
+
+      <div className="mt-8 p-5 bg-[#1a1a1a] rounded-xl border border-sky-500 shadow-lg text-center w-full max-w-md">
+        <h3 className="text-xl font-semibold mb-2 text-sky-300">Estatísticas</h3>
+        <p>🧩 Revisados: {stats.reviewed}</p>
+        <p>✅ Acertos: {stats.correct}</p>
+        <p>❌ Erros: {stats.wrong}</p>
+        <p>🎯 Precisão: {accuracy}%</p>
+        <p>📚 Sessão atual: {stats.sessions}</p>
       </div>
     </main>
   );
